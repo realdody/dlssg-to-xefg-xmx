@@ -664,7 +664,8 @@ NGXResult FrameGenerator::Evaluate(ID3D12GraphicsCommandList* cmdList, const NGX
 		CaptureRealFrame(cmdList, params);
 
 		Plugin::Report({ settings.width, settings.height, frameCount,
-			settings.uiMode != XEFGD_UI_MODE_AUTO, settings.model == MfgKernels::MfgModel, context == nullptr });
+			settings.uiMode != XEFGD_UI_MODE_AUTO, settings.model == MfgKernels::MfgModel, context == nullptr,
+			settings.format == DXGI_FORMAT_R16G16B16A16_FLOAT });
 	}
 
 	const auto result = Interpolate(cmdList, output->GetDesc(), frameIndex, frameCount);

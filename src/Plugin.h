@@ -37,6 +37,7 @@ namespace Plugin
 		bool hudless = false;
 		bool xmxNetwork = false;
 		bool failed = false; // no XeFG context
+		bool fp16 = false;   // 16-bit float (scRGB) back buffer, XeFG only takes 8-bit and HDR10
 	};
 
 	void Report(const Status& status);

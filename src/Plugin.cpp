@@ -43,6 +43,11 @@ namespace
 			Red("No compatible libxess_fg.dll");
 			logTooltip();
 		}
+		else if (active && current.failed && current.fp16)
+		{
+			Red("16-bit HDR isn't supported");
+			api->Text("XeFG only supports SDR and HDR10, switch the game to one of them");
+		}
 		else if (active && current.failed)
 		{
 			Red("XeFG couldn't start");
