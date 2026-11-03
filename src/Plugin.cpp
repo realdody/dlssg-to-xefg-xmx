@@ -97,6 +97,31 @@ namespace
 	{
 		api->Section("Settings");
 
+		static constexpr const char* PathNames[] = { "XMX Port", "CUDA", "Fallback (DP4a)" };
+		const auto support = Plugin::cudaSupport.load();
+		const bool cudaDisabled = support == Plugin::CudaSupport::Unsupported;
+
+		int32_t path = (int32_t)Plugin::options.path.load();
+
+		// A saved CUDA choice on an unsupported GPU runs the XMX port, show what is actually running
+		if (path == (int32_t)Plugin::Path::Cuda && cudaDisabled)
+			path = (int32_t)Plugin::Path::XmxPort;
+
+		const bool disabled[] = { false, cudaDisabled, false };
+
+		if (api->Combo("Network path", &path, PathNames, 3, disabled))
+		{
+			Plugin::options.path = (Plugin::Path)path;
+			api->SetInt(self, "NetworkPath", path);
+		}
+
+		api->ItemTooltip(cudaDisabled
+			? "CUDA needs an NVIDIA RTX GPU with tensor cores.\n"
+			  "XMX Port runs the ported model on DXIL, Fallback uses XeFG's DP4a model."
+			: "XMX Port: ported XMX model on DXIL\n"
+			  "CUDA: ported XMX model on NVIDIA tensor cores\n"
+			  "Fallback (DP4a): XeFG's default model");
+
 		bool hudlessUi = Plugin::options.hudlessUi;
 
 		if (api->Checkbox("HUDless UI", &hudlessUi))
@@ -138,7 +163,11 @@ extern "C" __declspec(dllexport) bool OptiPluginInit(const OptiPluginApi* optiAp
 
 	Log::Info("OptiScaler plugin API version {}", api->version);
 
+	const int32_t path = api->GetInt(self, "NetworkPath", (int32_t)Plugin::options.path.load());
+	if (path >= (int32_t)Plugin::Path::XmxPort && path <= (int32_t)Plugin::Path::Fallback)
+		Plugin::options.path = (Plugin::Path)path;
+
 	Plugin::options.hudlessUi = api->GetBool(self, "HudlessUi", Plugin::options.hudlessUi);
 
-	return api->RegisterTab(self, "dlssg-to-xefg", "XeFG replacing DLSS Frame Generation", DrawTab, nullptr);
+	return api->RegisterTab(self, "XeMFG XMX", "XeFG replacing DLSS Frame Generation", DrawTab, nullptr);
 }

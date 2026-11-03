@@ -48,6 +48,11 @@ bool Install(ID3D12Device* device, HMODULE providerModule, std::span<const unsig
 // The configuration turned the route off (OptiScaler.ini [XeFG] XeFGTensorCores = off).
 void Disable(const char* reason) noexcept;
 
+// Dispatch gate: the hooks stay installed, but pass every call through while disabled. Only matters once the route is
+// active, so a context can switch between the CUDA and DXIL paths without restarting.
+void SetEnabled(bool enabled) noexcept;
+bool Enabled() noexcept;
+
 // psorefused.1 (tests): false restores the caller rule pipeline states had before (the provider is the caller, or the
 // first frame after the wrapper's), which lists always keep. On by default.
 void SetStackRecognition(bool enabled) noexcept;

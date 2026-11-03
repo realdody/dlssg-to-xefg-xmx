@@ -378,21 +378,33 @@ static void GetProjectionMatrix(const NGXParameter& params, bool depthInverted, 
 }
 
 // The ported XMX MFG model is XeFG's XMX network. Without the program set XeFG keeps its default DP4a model.
-static int32_t PickModel()
+static bool PortAvailable()
 {
-	static const bool xmx = MfgKernels::Install(XeFG::Module());
-	Log::Info("Ported XMX MFG model available: {}", xmx);
+	static const bool available = []
+		{
+			const bool installed = MfgKernels::Install(XeFG::Module());
+			Log::Info("Ported XMX MFG model available: {}", installed);
+			return installed;
+		}();
 
-	return xmx ? MfgKernels::MfgModel : MfgKernels::Dp4aModel;
+	return available;
 }
 
-// The ported model runs on the CUDA tensor-core route when it's active, otherwise on the DXIL port of the same model.
+static int32_t PickModel()
+{
+	if (!PortAvailable() || Plugin::options.path == Plugin::Path::Fallback)
+		return MfgKernels::Dp4aModel;
+
+	return MfgKernels::MfgModel;
+}
+
+// The ported model runs on the CUDA tensor-core route when it's enabled, otherwise on the DXIL port of the same model.
 static Plugin::Network CurrentNetwork(int32_t model)
 {
 	if (model != MfgKernels::MfgModel)
 		return Plugin::Network::Fallback;
 
-	return xefg_cuda::Snapshot().state == xefg_cuda::State::Active ? Plugin::Network::Cuda : Plugin::Network::XmxPort;
+	return xefg_cuda::Enabled() ? Plugin::Network::Cuda : Plugin::Network::XmxPort;
 }
 
 bool FrameGenerator::CreateContext()
@@ -404,6 +416,9 @@ bool FrameGenerator::CreateContext()
 
 	// Optional, and only for the ported model: the route recognizes the int8 layers XeFG decodes itself and
 	// the ported flow programs in the program set. No fatbin (or no NVIDIA RTX GPU) leaves the DXIL path intact.
+	// It's installed even when another path is selected, so the menu knows whether CUDA is available.
+	Plugin::cudaSupport = Plugin::CudaSupport::Unsupported;
+
 	if (mfgModel)
 	{
 		wchar_t tensorCores[16]{};
@@ -421,10 +436,14 @@ bool FrameGenerator::CreateContext()
 
 			const auto fatbin = LoadCudaFatbin(MfgKernels::ProgramsDirectory() / L"xefg_cuda_layers.fatbin");
 			std::string reason;
-			if (!xefg_cuda::Install(device.Get(), XeFG::Module(), fatbin, reason))
+			if (xefg_cuda::Install(device.Get(), XeFG::Module(), fatbin, reason))
+				Plugin::cudaSupport = Plugin::CudaSupport::Supported;
+			else
 				Log::Info("Tensor-core route inactive: {}", reason);
 		}
 	}
+
+	xefg_cuda::SetEnabled(settings.model == MfgKernels::MfgModel && Plugin::options.path == Plugin::Path::Cuda);
 
 	// Process wide, they also affect other XeFG contexts. Must happen before the context picks its model
 	XeFG::SetMaxInterpolatedFrames(MaxFrames);
@@ -520,6 +539,7 @@ void FrameGenerator::CaptureRealFrame(ID3D12GraphicsCommandList* cmdList, const 
 	if (!context)
 		return;
 
+	xefg_cuda::SetEnabled(settings.model == MfgKernels::MfgModel && Plugin::options.path == Plugin::Path::Cuda);
 	XeFG::SetDebugLines(Plugin::options.debugLines);
 
 	context->current ^= 1;

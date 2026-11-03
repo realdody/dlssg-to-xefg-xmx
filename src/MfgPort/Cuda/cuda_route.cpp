@@ -1325,6 +1325,18 @@ void Disable(const char* reason) noexcept
     Log("cuda_route", std::string("\"state\":\"disabled\",\"reason\":\"") + (reason ? reason : "disabled") + "\"");
 }
 
+void SetEnabled(bool enabled) noexcept
+{
+    std::lock_guard lock(gMutex);
+    if (gState.load(std::memory_order_acquire) == State::Active)
+        gActive.store(enabled, std::memory_order_release);
+}
+
+bool Enabled() noexcept
+{
+    return gState.load(std::memory_order_acquire) == State::Active && gActive.load(std::memory_order_acquire);
+}
+
 void ForgetLayers() noexcept
 {
     std::lock_guard lock(gMutex);
