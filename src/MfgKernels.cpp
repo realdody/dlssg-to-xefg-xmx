@@ -92,3 +92,8 @@ bool MfgKernels::Install(HMODULE module)
 
 	return state.active;
 }
+
+std::filesystem::path MfgKernels::ProgramsDirectory()
+{
+	return FindPrograms();
+}

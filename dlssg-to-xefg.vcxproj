@@ -30,6 +30,8 @@
     <TargetName>dlssg_to_xefg_intel_is_better</TargetName>
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\</IntDir>
+    <XeFgProgramsDir>$(OutDir)xefg_mfg_programs</XeFgProgramsDir>
+    <XeFgCudaSha256 Condition="'$(XeFgCudaSha256)' == ''"></XeFgCudaSha256>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -47,7 +49,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d12.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EnableCOMDATFolding Condition="'$(Configuration)'=='Release'">true</EnableCOMDATFolding>
       <OptimizeReferences Condition="'$(Configuration)'=='Release'">true</OptimizeReferences>
     </Link>
@@ -58,6 +60,7 @@
     <ClCompile Include="src\Log.cpp" />
     <ClCompile Include="src\MfgKernels.cpp" />
     <ClCompile Include="src\MfgPort\RuntimePayload.cpp" />
+    <ClCompile Include="src\MfgPort\Cuda\cuda_route.cpp" />
     <ClCompile Include="src\XeFG.cpp" />
     <ClCompile Include="src\XeFGLoader.cpp" />
   </ItemGroup>
@@ -72,9 +75,28 @@
     <ClInclude Include="src\MfgPort\RuntimePayload.h" />
     <ClInclude Include="src\MfgPort\Sha256.h" />
     <ClInclude Include="src\MfgPort\ShaderPort.h" />
+    <ClInclude Include="src\MfgPort\Cuda\AdapterDiscovery.h" />
+    <ClInclude Include="src\MfgPort\Cuda\cuda_route.h" />
+    <ClInclude Include="src\MfgPort\Cuda\OverlayNative.h" />
+    <ClInclude Include="src\MfgPort\Cuda\xefg_cuda_params.h" />
     <ClInclude Include="src\NGX.h" />
     <ClInclude Include="src\Util.h" />
     <ClInclude Include="src\XeFG.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!-- The ported XeSS MFG programs and the tensor-core fatbin are Intel/MFG-Unlocker build data, so they stay out of
+       the repo. This extracts the pinned set and fatbin from MFG-Unlocker's release dll into the runtime folder. -->
+  <Target Name="GenerateXeFgPrograms" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Message Importance="high" Text="Generating the XeFG MFG program set..." />
+    <Exec Command="powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\tools\GenerateXeFgPrograms.ps1&quot; -Output &quot;$(XeFgProgramsDir)&quot; -Cache &quot;$(IntDir)packages&quot; -Dll &quot;$(MfgUnlockerDll)&quot;" />
+  </Target>
+  <!-- Optional: rebuild the tensor-core fatbin from source. By default GenerateXeFgPrograms extracts the pinned,
+       validated fatbin from MFG-Unlocker's release dll; without CudaRoot this target is skipped. -->
+  <Target Name="GenerateXeFgCuda" AfterTargets="Build" DependsOnTargets="GenerateXeFgPrograms" Condition="'$(DesignTimeBuild)' != 'true' and '$(CudaRoot)' != ''">
+    <Message Importance="high" Text="Generating the XeFG tensor-core kernel fatbin..." />
+    <Exec Command="powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\tools\GenerateXeFgCuda.ps1&quot; -Output &quot;$(XeFgProgramsDir)&quot; -CudaRoot &quot;$(CudaRoot)&quot; -Source &quot;$(MSBuildProjectDirectory)\src\MfgPort\Cuda&quot; -VcVars &quot;$(VCInstallDir)Auxiliary\Build\vcvars64.bat&quot; -VcVarsVersion &quot;$(VCToolsVersion)&quot; -ExpectedSha256 &quot;$(XeFgCudaSha256)&quot;" />
+  </Target>
+  <Target Name="ReportXeFgCudaSkipped" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true' and '$(CudaRoot)' == ''">
+    <Message Importance="normal" Text="CUDA source rebuild not configured; using the extracted XeFG tensor-core fatbin." />
+  </Target>
 </Project>

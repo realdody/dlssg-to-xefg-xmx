@@ -3,6 +3,7 @@
 #include <Windows.h>
 
 #include <cstdint>
+#include <filesystem>
 
 // MFG-Unlocker's ported XMX multi frame model, driven the same way it drives it.
 //
@@ -20,4 +21,7 @@ namespace MfgKernels
 	// the program set isn't next to this dll or libxess_fg.dll isn't a build MFG-Unlocker's port knows, in which case
 	// XeFG keeps its DP4a model
 	bool Install(HMODULE module);
+
+	// Folder `Install` looks in (and loaded the program set from). The optional CUDA fatbin lives beside it.
+	std::filesystem::path ProgramsDirectory();
 } // namespace MfgKernels

@@ -1,16 +1,53 @@
 #include "FrameGenerator.h"
 #include "Log.h"
 #include "MfgKernels.h"
+#include "MfgPort/Cuda/cuda_route.h"
 #include "Util.h"
 
 #include <DirectXMath.h>
 
 #include <cmath>
+#include <cwchar>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <mutex>
 #include <numbers>
+#include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace DirectX;
+
+namespace
+{
+	// The optional fatbin is built from src/MfgPort/Cuda/xefg_cuda_layers.cu when CudaRoot is set.
+	// Its absence is not an error: XeFG keeps running the DXIL/DP4a programs.
+	std::vector<unsigned char> LoadCudaFatbin(const std::filesystem::path& path)
+	{
+		std::ifstream file(path, std::ios::binary);
+		if (!file)
+			return {};
+
+		std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(file)), {});
+		if (file.bad() || bytes.empty() || bytes.size() > 16 * 1024 * 1024)
+			return {};
+
+		return bytes;
+	}
+
+	void CudaRouteLog(const char* stage, const std::string& fields) noexcept
+	{
+		try
+		{
+			Log::Info("{} {}", stage, fields);
+		}
+		catch (...)
+		{
+		}
+	}
+} // namespace
 
 // States of the DLSSG resources when EvaluateFeature is called (same as dlssg-to-fsr3 assumes)
 constexpr auto BackbufferState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
@@ -345,6 +382,30 @@ bool FrameGenerator::CreateContext()
 
 	// Publishing the ported model patches libxess_fg.dll process wide, so it runs before the first context
 	const bool mfgModel = MfgKernels::Install(XeFG::Module());
+
+	// Optional, and only for the ported model: the route recognizes the int8 layers XeFG decodes itself and
+	// the ported flow programs in the program set. No fatbin (or no NVIDIA RTX GPU) leaves the DXIL path intact.
+	if (mfgModel)
+	{
+		wchar_t tensorCores[16]{};
+		const DWORD tensorCoresLength = GetEnvironmentVariableW(L"XEFG_TENSOR_CORES", tensorCores, 16);
+
+		if (tensorCoresLength && tensorCoresLength < 16 && (tensorCores[0] == L'0' || _wcsicmp(tensorCores, L"off") == 0
+			|| _wcsicmp(tensorCores, L"false") == 0))
+		{
+			Log::Info("Tensor-core route disabled by XEFG_TENSOR_CORES");
+		}
+		else
+		{
+			static std::once_flag cudaLogOnce;
+			std::call_once(cudaLogOnce, [] { xefg_cuda::SetLog(CudaRouteLog); });
+
+			const auto fatbin = LoadCudaFatbin(MfgKernels::ProgramsDirectory() / L"xefg_cuda_layers.fatbin");
+			std::string reason;
+			if (!xefg_cuda::Install(device.Get(), XeFG::Module(), fatbin, reason))
+				Log::Info("Tensor-core route inactive: {}", reason);
+		}
+	}
 
 	// Process wide, they also affect other XeFG contexts. Must happen before the context picks its model
 	XeFG::SetMaxInterpolatedFrames(MaxFrames);
