@@ -381,10 +381,18 @@ static void GetProjectionMatrix(const NGXParameter& params, bool depthInverted, 
 static int32_t PickModel()
 {
 	static const bool xmx = MfgKernels::Install(XeFG::Module());
-	Log::Info("XMX network supported: {}", xmx);
-	Plugin::xmx = xmx ? Plugin::Xmx::Supported : Plugin::Xmx::Unsupported;
+	Log::Info("Ported XMX MFG model available: {}", xmx);
 
-	return xmx && Plugin::options.xmxNetwork ? MfgKernels::MfgModel : MfgKernels::Dp4aModel;
+	return xmx ? MfgKernels::MfgModel : MfgKernels::Dp4aModel;
+}
+
+// The ported model runs on the CUDA tensor-core route when it's active, otherwise on the DXIL port of the same model.
+static Plugin::Network CurrentNetwork(int32_t model)
+{
+	if (model != MfgKernels::MfgModel)
+		return Plugin::Network::Fallback;
+
+	return xefg_cuda::Snapshot().state == xefg_cuda::State::Active ? Plugin::Network::Cuda : Plugin::Network::XmxPort;
 }
 
 bool FrameGenerator::CreateContext()
@@ -663,9 +671,8 @@ NGXResult FrameGenerator::Evaluate(ID3D12GraphicsCommandList* cmdList, const NGX
 	{
 		CaptureRealFrame(cmdList, params);
 
-		Plugin::Report({ settings.width, settings.height, frameCount,
-			settings.uiMode != XEFGD_UI_MODE_AUTO, settings.model == MfgKernels::MfgModel, context == nullptr,
-			settings.format == DXGI_FORMAT_R16G16B16A16_FLOAT });
+		Plugin::Report({ settings.width, settings.height, frameCount, settings.uiMode != XEFGD_UI_MODE_AUTO,
+			CurrentNetwork(settings.model), context == nullptr, settings.format == DXGI_FORMAT_R16G16B16A16_FLOAT });
 	}
 
 	const auto result = Interpolate(cmdList, output->GetDesc(), frameIndex, frameCount);

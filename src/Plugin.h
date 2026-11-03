@@ -9,8 +9,6 @@ namespace Plugin
 {
 	struct Options
 	{
-		// Only matters where XeFG would pick the XMX network itself
-		std::atomic_bool xmxNetwork = true;
 		// Lets XeFG composite the UI from the game's HUDless color instead of interpolating it with the scene
 		std::atomic_bool hudlessUi = true;
 		// Not saved
@@ -19,14 +17,14 @@ namespace Plugin
 
 	inline Options options;
 
-	enum class Xmx : int32_t
+	// Which implementation of the MFG model is running
+	enum class Network : int32_t
 	{
-		Unknown, // XeFG hasn't looked at a GPU yet
-		Supported,
-		Unsupported,
+		Unknown,
+		XmxPort,
+		Cuda,
+		Fallback, // DP4a model 18, the ported model isn't available
 	};
-
-	inline std::atomic<Xmx> xmx = Xmx::Unknown;
 
 	// One real frame of the frame generator that ran last
 	struct Status
@@ -35,7 +33,7 @@ namespace Plugin
 		uint32_t height = 0;
 		uint32_t generatedFrames = 0; // between two real frames
 		bool hudless = false;
-		bool xmxNetwork = false;
+		Network network = Network::Unknown;
 		bool failed = false; // no XeFG context
 		bool fp16 = false;   // 16-bit float (scRGB) back buffer, XeFG only takes 8-bit and HDR10
 	};

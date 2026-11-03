@@ -23,6 +23,21 @@ namespace
 	void Green(const char* text) { api->TextColored(0.45f, 0.85f, 0.45f, 1.0f, text); }
 	void Red(const char* text) { api->TextColored(1.0f, 0.45f, 0.4f, 1.0f, text); }
 
+	const char* NetworkName(Plugin::Network network)
+	{
+		switch (network)
+		{
+		case Plugin::Network::XmxPort:
+			return "XMX Port";
+		case Plugin::Network::Cuda:
+			return "CUDA";
+		case Plugin::Network::Fallback:
+			return "Fallback (DP4a)";
+		default:
+			return "Unknown";
+		}
+	}
+
 	void DrawStatus()
 	{
 		Plugin::Status current;
@@ -71,7 +86,7 @@ namespace
 		auto line = std::format("XeFG {}.{}.{}", library.major, library.minor, library.patch);
 
 		if (active && !current.failed)
-			line += current.xmxNetwork ? " \xC2\xB7 XMX network" : " \xC2\xB7 default network";
+			line += std::format(" \xC2\xB7 {}", NetworkName(current.network));
 
 		api->Text(line.c_str());
 		api->ItemTooltip(std::format("{}\n{}", library.path.string(),
@@ -82,21 +97,6 @@ namespace
 	{
 		api->Section("Settings");
 
-		const bool noXmx = Plugin::xmx == Plugin::Xmx::Unsupported;
-		bool xmxNetwork = Plugin::options.xmxNetwork && !noXmx;
-
-		api->Disabled(noXmx);
-
-		if (api->Checkbox("XMX network", &xmxNetwork))
-		{
-			Plugin::options.xmxNetwork = xmxNetwork;
-			api->SetBool(self, "XmxNetwork", xmxNetwork);
-		}
-
-		api->ItemTooltip(noXmx ? "Only for Intel GPUs with XMX"
-							   : "XeFG's network for Intel GPUs with XMX.\nOff uses the one every other GPU gets.");
-		api->Disabled(false);
-
 		bool hudlessUi = Plugin::options.hudlessUi;
 
 		if (api->Checkbox("HUDless UI", &hudlessUi))
@@ -105,7 +105,8 @@ namespace
 			api->SetBool(self, "HudlessUi", hudlessUi);
 		}
 
-		api->ItemTooltip("Takes the UI from the game's HUDless image, so it isn't warped by interpolation.\n"
+		api->ItemTooltip("Uses the game's HUDless image to draw the UI into generated frames, instead of\n"
+						 "interpolating the UI with the scene. It doesn't highlight the HUD.\n"
 						 "Turn off if the game's HUDless image is broken.");
 
 		bool debugLines = Plugin::options.debugLines;
@@ -137,7 +138,6 @@ extern "C" __declspec(dllexport) bool OptiPluginInit(const OptiPluginApi* optiAp
 
 	Log::Info("OptiScaler plugin API version {}", api->version);
 
-	Plugin::options.xmxNetwork = api->GetBool(self, "XmxNetwork", Plugin::options.xmxNetwork);
 	Plugin::options.hudlessUi = api->GetBool(self, "HudlessUi", Plugin::options.hudlessUi);
 
 	return api->RegisterTab(self, "dlssg-to-xefg", "XeFG replacing DLSS Frame Generation", DrawTab, nullptr);
