@@ -73,7 +73,19 @@ function Get-Sha256Hex([byte[]]$Bytes) {
 }
 
 function Get-FileSha256Hex([string]$Path) {
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    # Hash through .NET instead of Get-FileHash so the script also runs in hosts where that cmdlet is unavailable.
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $digest = $sha.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha.Dispose()
+    }
+    return [System.BitConverter]::ToString($digest).Replace('-', '').ToLowerInvariant()
 }
 
 function Get-LicenseBytes {

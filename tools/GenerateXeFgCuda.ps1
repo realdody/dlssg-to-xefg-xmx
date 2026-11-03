@@ -109,7 +109,18 @@ foreach ($kernel in $Kernels) {
     }
 }
 
-$hash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+$sha = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $stream = [System.IO.File]::OpenRead($target)
+    try {
+        $digest = $sha.ComputeHash($stream)
+    } finally {
+        $stream.Dispose()
+    }
+} finally {
+    $sha.Dispose()
+}
+$hash = [System.BitConverter]::ToString($digest).Replace('-', '').ToLowerInvariant()
 if ($ExpectedSha256 -and $hash -ne $ExpectedSha256.ToLowerInvariant()) {
     throw "fatbin hash $hash does not match the pinned $ExpectedSha256"
 }
