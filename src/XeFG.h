@@ -170,6 +170,9 @@ namespace XeFG
 	// Process wide settings, they apply to contexts created afterwards
 	void SetMaxInterpolatedFrames(uint32_t maxFrames); // the library's default cap is 3
 	void OverrideModel(int32_t modelId);
+	// The model a context on device picks without an override: the XMX network (17) only on Intel GPUs whose driver
+	// reports XMX. Creates and destroys a context, 0 when that fails
+	int32_t AutoModel(ID3D12Device* device);
 	// XeFG draws debug lines into the generated frames, from the next Execute on
 	void SetDebugLines(bool enable);
 

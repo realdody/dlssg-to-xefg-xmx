@@ -7,18 +7,20 @@
 
 namespace Plugin
 {
-	// The selected implementation of the MFG model
+	// The selected network path
 	enum class Path : int32_t
 	{
 		XmxPort,
 		Cuda,
 		Fallback, // DP4a model 18
+		XmxNative, // XeFG's own XMX network (17), no port, Intel GPUs with XMX only
 	};
 
 	struct Options
 	{
-		// The ported XMX model on DXIL, the same model on CUDA tensor cores, or XeFG's DP4a model
-		std::atomic<Path> path = Path::Cuda;
+		// XeFG's own XMX network on Intel GPUs with XMX, the ported model on DXIL or CUDA tensor cores, or its DP4a
+		// model. Unsupported choices fall back the way the menu shows
+		std::atomic<Path> path = Path::XmxNative;
 		// Lets XeFG composite the UI from the game's HUDless color instead of interpolating it with the scene
 		std::atomic_bool hudlessUi = true;
 		// Not saved
@@ -36,10 +38,20 @@ namespace Plugin
 
 	inline std::atomic<CudaSupport> cudaSupport = CudaSupport::Unknown;
 
-	// Which implementation of the MFG model is running
+	enum class XmxSupport : int32_t
+	{
+		Unknown, // XeFG hasn't looked at a GPU yet
+		Supported, // XeFG picks its own XMX network on this GPU
+		Unsupported,
+	};
+
+	inline std::atomic<XmxSupport> xmxSupport = XmxSupport::Unknown;
+
+	// Which network is running
 	enum class Network : int32_t
 	{
 		Unknown,
+		XmxNative, // XeFG's own XMX network (17)
 		XmxPort,
 		Cuda,
 		Fallback, // DP4a model 18, the ported model isn't available

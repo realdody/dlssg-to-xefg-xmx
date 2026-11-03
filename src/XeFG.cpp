@@ -396,6 +396,28 @@ void XeFG::OverrideModel(int32_t modelId)
 	memcpy(api.settings + api.layout->modelOverride, &modelId, sizeof(modelId));
 }
 
+int32_t XeFG::AutoModel(ID3D12Device* device)
+{
+	// XefgContext::model, the same in 1.3.1 and 1.3.4. CreateContext only stores its pick once the device passed
+	// XeFG's checks, one of them failing Intel GPUs with driver extensions but without XMX
+	constexpr size_t ContextModel = 76;
+
+	api.settings[api.layout->modelOverrideSet] = 0;
+
+	xefgd_handle_t probe = nullptr;
+	api.createContext(device, &probe);
+
+	if (!probe)
+		return 0;
+
+	const uint8_t* context = *reinterpret_cast<uint8_t* const*>(reinterpret_cast<const uint8_t*>(probe) + 8);
+	int32_t model;
+	memcpy(&model, context + ContextModel, sizeof(model));
+
+	api.destroy(probe);
+	return model;
+}
+
 void XeFG::SetDebugLines(bool enable)
 {
 	uint32_t value = enable ? 1 : 0;

@@ -58,6 +58,9 @@ constexpr auto OutputState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 // What XeFG wants for its inputs, our copies always rest in this state
 constexpr auto XeFGInputState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
+// XeFG's own XMX network, shipped in libxess_fg.dll. XeFG only picks it on Intel GPUs whose driver reports XMX
+constexpr int32_t XeFGXmxModel = 17;
+
 // The raw DXGI_FORMAT number says nothing in a log, the games' formats are worth naming
 static const char* FormatName(DXGI_FORMAT format)
 {
@@ -390,17 +393,60 @@ static bool PortAvailable()
 	return available;
 }
 
-static int32_t PickModel()
+// XeFG's own XMX check decides: a context with no override picks the XMX network only on Intel GPUs whose driver
+// reports XMX. Probed once for the first device, before the first override, and kept for the menu's support state.
+static int32_t NativeModel(ID3D12Device* device)
 {
-	if (!PortAvailable() || Plugin::options.path == Plugin::Path::Fallback)
-		return MfgKernels::Dp4aModel;
+	static const int32_t model = [device]
+		{
+			const int32_t picked = XeFG::AutoModel(device);
 
-	return MfgKernels::MfgModel;
+			Plugin::xmxSupport = picked == XeFGXmxModel ? Plugin::XmxSupport::Supported : Plugin::XmxSupport::Unsupported;
+			Log::Info("XeFG model: {}", picked);
+			return picked;
+		}();
+
+	return model;
 }
 
-// The ported model runs on the CUDA tensor-core route when it's enabled, otherwise on the DXIL port of the same model.
+static int32_t PickModel(ID3D12Device* device)
+{
+	const int32_t native = NativeModel(device);
+
+	switch (Plugin::options.path.load())
+	{
+	case Plugin::Path::Fallback:
+		return MfgKernels::Dp4aModel;
+	case Plugin::Path::XmxNative:
+		if (native == XeFGXmxModel)
+			return XeFGXmxModel;
+
+		// Unsupported, the CUDA / ported defaults below, the same as an unsupported CUDA choice
+		break;
+	case Plugin::Path::Cuda:
+	case Plugin::Path::XmxPort:
+		break;
+	}
+
+	return PortAvailable() ? MfgKernels::MfgModel : MfgKernels::Dp4aModel;
+}
+
+// The ported model runs on the CUDA tensor-core route when that's the selected path, otherwise on DXIL. XeFG's own
+// XMX network doesn't need the port at all.
+static bool UseCuda(int32_t model)
+{
+	if (model != MfgKernels::MfgModel)
+		return false;
+
+	const auto path = Plugin::options.path.load();
+	return path == Plugin::Path::Cuda || path == Plugin::Path::XmxNative;
+}
+
 static Plugin::Network CurrentNetwork(int32_t model)
 {
+	if (model == XeFGXmxModel)
+		return Plugin::Network::XmxNative;
+
 	if (model != MfgKernels::MfgModel)
 		return Plugin::Network::Fallback;
 
@@ -412,7 +458,7 @@ bool FrameGenerator::CreateContext()
 	auto newContext = std::make_shared<Context>();
 
 	// Publishing the ported model patches libxess_fg.dll process wide, so it runs before the first context
-	const bool mfgModel = MfgKernels::Install(XeFG::Module());
+	const bool mfgModel = settings.model != XeFGXmxModel && MfgKernels::Install(XeFG::Module());
 
 	// Optional, and only for the ported model: the route recognizes the int8 layers XeFG decodes itself and
 	// the ported flow programs in the program set. No fatbin (or no NVIDIA RTX GPU) leaves the DXIL path intact.
@@ -443,7 +489,7 @@ bool FrameGenerator::CreateContext()
 		}
 	}
 
-	xefg_cuda::SetEnabled(settings.model == MfgKernels::MfgModel && Plugin::options.path == Plugin::Path::Cuda);
+	xefg_cuda::SetEnabled(UseCuda(settings.model));
 
 	// Process wide, they also affect other XeFG contexts. Must happen before the context picks its model
 	XeFG::SetMaxInterpolatedFrames(MaxFrames);
@@ -502,7 +548,7 @@ void FrameGenerator::CaptureRealFrame(ID3D12GraphicsCommandList* cmdList, const 
 	wanted.initFlags = (depthInverted ? XEFGD_INIT_FLAG_INVERTED_DEPTH : 0) |
 		(params.GetOr<uint32_t>("DLSSG.MvecJittered", 0) ? XEFGD_INIT_FLAG_JITTERED_MV : 0);
 	wanted.uiMode = hudless ? XEFGD_UI_MODE_BACKBUFFER_HUDLESS : XEFGD_UI_MODE_AUTO;
-	wanted.model = PickModel();
+	wanted.model = PickModel(device.Get());
 
 	if (wanted != settings)
 	{
@@ -539,7 +585,7 @@ void FrameGenerator::CaptureRealFrame(ID3D12GraphicsCommandList* cmdList, const 
 	if (!context)
 		return;
 
-	xefg_cuda::SetEnabled(settings.model == MfgKernels::MfgModel && Plugin::options.path == Plugin::Path::Cuda);
+	xefg_cuda::SetEnabled(UseCuda(settings.model));
 	XeFG::SetDebugLines(Plugin::options.debugLines);
 
 	context->current ^= 1;
