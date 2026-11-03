@@ -47,10 +47,35 @@ were only verified for 1.3.1 and 1.3.4.
 
 Visual Studio 2026 (v145 toolset), open `dlssg-to-xefg.sln` and build Release x64. The output lands in `bin\Release`.
 
+The ported XeSS MFG programs are not committed, and no MFG-Unlocker checkout or submodule is needed: the build
+downloads its pinned v1.7.0 release dll, extracts the program set and the validated tensor-core fatbin into
+`bin\Release\xefg_mfg_programs`, which has to ship next to the dll. The download and its contents are checked against
+pinned SHA-256 values and cached under `obj\Release\packages`. The generated folder also carries MFG-Unlocker's MIT
+LICENSE. For an offline build, pass `/p:MfgUnlockerDll=<path to MFGUnlocker.dll>`. No local CUDA toolkit is needed:
+`xefg_cuda_layers.fatbin` is the pinned RCDATA 7300 resource (`2ffae52e…`) from that dll.
+
+The tensor-core route is optional at runtime. The fatbin has SASS for RTX 20/30/40/50 and is loaded next to the program
+set; no CUDA runtime is linked or shipped. On an RTX GPU the log shows `cuda_route active`, then `cuda_layer` lines,
+with `cuda_dispatch_fallback` for any layer it had to leave on DXIL. The native layer hashes target XeFG 3.0.2; 1.3.4
+may keep those layers on DXIL until its hashes are added. Set `XEFG_TENSOR_CORES=0` to force the DXIL path without
+deleting the fatbin. `CudaRoot` is only for rebuilding the kernels from source with CUDA 13.2 during development; it
+overwrites the extracted fatbin in the build output.
+
+### Trying the tensor-core path
+
+1. Build Release normally; the pinned fatbin is extracted automatically. Only set `CudaRoot` if you changed the kernels.
+2. Keep `libxess_fg.dll` 1.3.1 (XeSS SDK 3.0.2) next to the dll; the native U-Net hashes in the route target that build.
+3. Launch, then check the log for `cuda_route active`, `"compute_capability":"12.0"` on an RTX 50 card, and
+   `cuda_layer` lines. `cuda_dispatch_fallback` means that layer stayed on DXIL by design or because its bindings
+   were incomplete.
+4. If the log says `Tensor-core route inactive: <reason>`, send that line and the surrounding `cuda_route` lines; the
+   reason distinguishes a missing fatbin, a non-NVIDIA/unsupported adapter, a wrapped device, and NVAPI failure.
+
 ## Credits
 
 The port in `src/MfgPort/` and `src/MfgKernels.cpp` is from [MFG-Unlocker](https://github.com/dashdogy/MFG-Unlocker),
-MIT licensed, Copyright (c) 2026 Michael Robles. See [NOTICE.md](NOTICE.md).
+MIT licensed, Copyright (c) 2026 Michael Robles. The CUDA route and kernels in `src/MfgPort/Cuda/` are also from
+MFG-Unlocker. See [NOTICE.md](NOTICE.md).
 
 ## License
 

@@ -19,6 +19,12 @@ jobs:
       - name: Build
         run: msbuild dlssg-to-xefg.sln -p:Configuration=Release -p:Platform=x64 -m
 
+      # msbuild already runs the project's GenerateXeFgPrograms target. Run the generator again so a build
+      # that skipped it still publishes the pinned programs and tensor-core fatbin; it is a no-op when current.
+      - name: Generate XeFG MFG programs
+        shell: pwsh
+        run: ./tools/GenerateXeFgPrograms.ps1 -Output bin\Release\xefg_mfg_programs -Cache obj\Release\packages
+
       - name: Package
         shell: pwsh
         run: |
@@ -29,7 +35,11 @@ jobs:
           New-Item -ItemType Directory -Path $programs -Force | Out-Null
 
           Copy-Item bin\Release\dlssg_to_xefg_intel_is_better.dll $dlssg
-          Copy-Item src\MfgPort\xefg_mfg_programs\* $programs -Recurse
+          Copy-Item bin\Release\xefg_mfg_programs\* $programs -Recurse
+
+          if (-not (Test-Path (Join-Path $programs "programs.tsv"))) { throw "The XeFG MFG program set was not generated" }
+          if (-not (Test-Path (Join-Path $programs "LICENSE"))) { throw "The XeFG MFG program LICENSE is missing" }
+          if (-not (Test-Path (Join-Path $programs "xefg_cuda_layers.fatbin"))) { throw "The XeFG tensor-core fatbin was not generated" }
 
           Add-Type -AssemblyName System.IO.Compression
           Add-Type -AssemblyName System.IO.Compression.FileSystem
