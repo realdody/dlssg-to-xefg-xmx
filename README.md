@@ -43,6 +43,11 @@ were only verified for 1.3.1 and 1.3.4.
 
 `dlssg_to_xefg_intel_is_better.log` next to the dll says which one was picked.
 
+## OptiScaler menu
+
+Loaded by OptiScaler from `custom\<name>\dlssg`, the dll adds a **dlssg-to-xefg** tab under PLUGINS with XeFG's status
+and its settings, kept in `[Plugin.<name>]` of `OptiScaler.ini`.
+
 ## Build
 
 Visual Studio 2026 (v145 toolset), open `dlssg-to-xefg.sln` and build Release x64. The output lands in `bin\Release`.

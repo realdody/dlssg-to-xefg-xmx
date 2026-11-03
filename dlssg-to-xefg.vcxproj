@@ -61,6 +61,7 @@
     <ClCompile Include="src\MfgKernels.cpp" />
     <ClCompile Include="src\MfgPort\RuntimePayload.cpp" />
     <ClCompile Include="src\MfgPort\Cuda\cuda_route.cpp" />
+    <ClCompile Include="src\Plugin.cpp" />
     <ClCompile Include="src\XeFG.cpp" />
     <ClCompile Include="src\XeFGLoader.cpp" />
   </ItemGroup>
@@ -80,6 +81,8 @@
     <ClInclude Include="src\MfgPort\Cuda\OverlayNative.h" />
     <ClInclude Include="src\MfgPort\Cuda\xefg_cuda_params.h" />
     <ClInclude Include="src\NGX.h" />
+    <ClInclude Include="src\optiscaler_plugin.h" />
+    <ClInclude Include="src\Plugin.h" />
     <ClInclude Include="src\Util.h" />
     <ClInclude Include="src\XeFG.h" />
   </ItemGroup>

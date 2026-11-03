@@ -48,6 +48,13 @@ namespace DeferredDestroy
 	}
 } // namespace DeferredDestroy
 
+inline std::filesystem::path ModulePath(HMODULE module)
+{
+	wchar_t path[MAX_PATH]{};
+	GetModuleFileNameW(module, path, MAX_PATH);
+	return path;
+}
+
 // Full path of this dll
 inline std::filesystem::path ThisModulePath()
 {
@@ -55,9 +62,7 @@ inline std::filesystem::path ThisModulePath()
 	GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
 		reinterpret_cast<LPCWSTR>(&ThisModulePath), &module);
 
-	wchar_t path[MAX_PATH]{};
-	GetModuleFileNameW(module, path, MAX_PATH);
-	return path;
+	return ModulePath(module);
 }
 
 inline void Barrier(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* resource, D3D12_RESOURCE_STATES before,

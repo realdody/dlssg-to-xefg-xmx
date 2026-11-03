@@ -30,6 +30,7 @@ private:
 		DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
 		uint32_t initFlags = 0;
 		uint32_t uiMode = XEFGD_UI_MODE_AUTO;
+		int32_t model = 0;
 
 		bool operator==(const Settings&) const = default;
 	};

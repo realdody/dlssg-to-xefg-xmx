@@ -4,18 +4,12 @@
 
 #include <Psapi.h>
 
+#include <atomic>
 #include <vector>
 
 namespace
 {
 	constexpr wchar_t XeFGDllName[] = L"libxess_fg.dll";
-
-	std::filesystem::path ModulePath(HMODULE module)
-	{
-		wchar_t path[MAX_PATH]{};
-		GetModuleFileNameW(module, path, MAX_PATH);
-		return path;
-	}
 
 	// Every libxess_fg.dll in the process, the game and Streamline plugins can bring their own copies
 	std::vector<HMODULE> LoadedXeFGModules()
@@ -99,8 +93,18 @@ namespace
 	}
 } // namespace
 
+static std::atomic<XeFG::LoadState> state = XeFG::LoadState::NotTried;
+
 bool XeFG::Load()
 {
-	static const bool loaded = Search();
+	static const bool loaded = []
+		{
+			const bool found = Search();
+			state = found ? LoadState::Loaded : LoadState::Failed;
+			return found;
+		}();
+
 	return loaded;
 }
+
+XeFG::LoadState XeFG::State() { return state; }

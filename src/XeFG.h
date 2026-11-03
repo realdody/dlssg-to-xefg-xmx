@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 
 // Same values as xefg_swapchain_result_t: 0 = success, > 0 warning, < 0 error
 using xefgd_result_t = int32_t;
@@ -136,8 +137,29 @@ static_assert(sizeof(xefgd_exec_params_t) == 608);
 
 namespace XeFG
 {
-	// Picks a compatible libxess_fg.dll, loaded ones first, then the one next to this dll. Only searches once
+	enum class LoadState
+	{
+		NotTried,
+		Loaded,
+		Failed,
+	};
+
+	struct LibraryInfo
+	{
+		std::filesystem::path path;
+		uint16_t major = 0;
+		uint16_t minor = 0;
+		uint16_t patch = 0;
+		bool knownBuild = false; // false when the API was found by scanning
+	};
+
+	// Picks a compatible libxess_fg.dll, loaded ones first, then the one next to this dll, then the one in
+	// <folder with dlls> when this dll is in <folder with dlls>\custom\<any name>\dlssg. Only searches once
 	bool Load();
+
+	// Can be called from any thread, Library is only set once this says Loaded
+	LoadState State();
+	const LibraryInfo& Library();
 
 	// The module Load picked, null until one is resolved
 	HMODULE Module();
@@ -148,9 +170,8 @@ namespace XeFG
 	// Process wide settings, they apply to contexts created afterwards
 	void SetMaxInterpolatedFrames(uint32_t maxFrames); // the library's default cap is 3
 	void OverrideModel(int32_t modelId);
-	// XeFG draws its own tags into the generated frames, from the next Execute on. Nothing turns it on yet, it's here
-	// for whatever ends up exposing the debug view
-	void SetDebugTagFrames(bool enable);
+	// XeFG draws debug lines into the generated frames, from the next Execute on
+	void SetDebugLines(bool enable);
 
 	xefgd_result_t CreateContext(ID3D12Device* device, xefgd_handle_t* context);
 	void SetLoggingCallback(xefgd_handle_t context, xefgd_logging_level_t level, xefgd_log_callback_t callback);

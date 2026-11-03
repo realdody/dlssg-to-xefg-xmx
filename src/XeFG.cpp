@@ -1,5 +1,6 @@
 #include "XeFG.h"
 #include "Log.h"
+#include "Util.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -40,7 +41,7 @@ namespace
 		size_t modelOverrideSet;   // byte
 		size_t modelOverride;      // int32
 		size_t sanityFloat;        // float, initialized to 0.7, the scene change threshold
-		size_t debugTagFrames;     // uint32, read by the output shaders' constants
+		size_t debugLines;         // uint32, read by the output shaders' constants
 		size_t maxFramesSet;       // byte
 		size_t maxFrames;          // uint32, only used when above the default of 3
 	};
@@ -283,7 +284,8 @@ namespace
 		}
 	}
 
-	bool HasCompatibleVersion(HMODULE module)
+	// Fills library's version, false when there's none
+	bool GetVersion(HMODULE module, XeFG::LibraryInfo& library)
 	{
 		struct Version
 		{
@@ -300,15 +302,24 @@ namespace
 		}
 
 		Log::Info("XeFG version {}.{}.{}", version.major, version.minor, version.patch);
-		return version.major == CompatibleMajor && version.minor == CompatibleMinor;
+		library.major = version.major;
+		library.minor = version.minor;
+		library.patch = version.patch;
+		return true;
 	}
+
+	XeFG::LibraryInfo library;
 } // namespace
+
+const XeFG::LibraryInfo& XeFG::Library() { return library; }
 
 bool XeFG::Resolve(HMODULE module)
 {
 	api = {};
 	api.module = module;
+	library = { ModulePath(module) };
 
+	const bool hasVersion = GetVersion(module, library);
 	const Image image = ParseImage(module);
 	const KnownBuild* known = nullptr;
 
@@ -330,12 +341,13 @@ bool XeFG::Resolve(HMODULE module)
 		api.setLoggingCallback = As<PfnSetLoggingCallback>(image.base + known->setLoggingCallback);
 		api.settingsInstance = As<PfnSettingsInstance>(image.base + known->settingsInstance);
 		api.layout = known->layout;
+		library.knownBuild = true;
 	}
 	else
 	{
 		Log::Info("Unknown libxess_fg.dll build {:08X}, scanning for the API", image.nt->FileHeader.TimeDateStamp);
 
-		if (!HasCompatibleVersion(module))
+		if (!hasVersion || library.major != CompatibleMajor || library.minor != CompatibleMinor)
 			return false;
 
 		Scan(image);
@@ -384,10 +396,10 @@ void XeFG::OverrideModel(int32_t modelId)
 	memcpy(api.settings + api.layout->modelOverride, &modelId, sizeof(modelId));
 }
 
-void XeFG::SetDebugTagFrames(bool enable)
+void XeFG::SetDebugLines(bool enable)
 {
 	uint32_t value = enable ? 1 : 0;
-	memcpy(api.settings + api.layout->debugTagFrames, &value, sizeof(value));
+	memcpy(api.settings + api.layout->debugLines, &value, sizeof(value));
 }
 
 xefgd_result_t XeFG::CreateContext(ID3D12Device* device, xefgd_handle_t* context)
