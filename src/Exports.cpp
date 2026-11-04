@@ -15,7 +15,7 @@ struct FeatureHandle : NGXHandle
 	std::shared_ptr<FrameGenerator> generator;
 };
 
-static NGXResult Init()
+static NGXResult Init(ID3D12Device* device)
 {
 	static const bool logged = []
 		{
@@ -24,18 +24,26 @@ static NGXResult Init()
 			return true;
 		}();
 
-	return XeFG::Load() ? NGX_SUCCESS : NGX_FAIL_FEATURE_NOT_SUPPORTED;
+	if (!XeFG::Load())
+		return NGX_FAIL_FEATURE_NOT_SUPPORTED;
+
+	// Probe XMX (native) and CUDA support now, so the menu can disable paths that would fail before the first FG
+	// context. The device is the earliest reliable one, and a null one leaves the probe to CreateContext.
+	FrameGenerator::ProbeSupport(device);
+
+	return NGX_SUCCESS;
 }
 
-NGX_EXPORT NGXResult NVSDK_NGX_D3D12_Init(unsigned long long, const wchar_t*, ID3D12Device*, const void*, uint32_t)
+NGX_EXPORT NGXResult NVSDK_NGX_D3D12_Init(unsigned long long, const wchar_t*, ID3D12Device* device, const void*,
+	uint32_t)
 {
-	return Init();
+	return Init(device);
 }
 
-NGX_EXPORT NGXResult NVSDK_NGX_D3D12_Init_Ext(unsigned long long, const wchar_t*, ID3D12Device*, uint32_t,
+NGX_EXPORT NGXResult NVSDK_NGX_D3D12_Init_Ext(unsigned long long, const wchar_t*, ID3D12Device* device, uint32_t,
 	const void*)
 {
-	return Init();
+	return Init(device);
 }
 
 NGX_EXPORT NGXResult NVSDK_NGX_D3D12_Shutdown()
@@ -74,12 +82,15 @@ NGX_EXPORT NGXResult NVSDK_NGX_D3D12_CreateFeature(ID3D12GraphicsCommandList* cm
 	if (!cmdList || !params || !handle)
 		return NGX_FAIL_INVALID_PARAMETER;
 
-	if (feature != NGX_FEATURE_FRAME_GENERATION || Init() != NGX_SUCCESS)
+	if (feature != NGX_FEATURE_FRAME_GENERATION)
 		return NGX_FAIL_FEATURE_NOT_SUPPORTED;
 
 	ComPtr<ID3D12Device> device;
 	if (FAILED(cmdList->GetDevice(IID_PPV_ARGS(&device))))
 		return NGX_FAIL_PLATFORM_ERROR;
+
+	if (Init(device.Get()) != NGX_SUCCESS)
+		return NGX_FAIL_FEATURE_NOT_SUPPORTED;
 
 	static std::atomic_uint32_t nextId = 1;
 

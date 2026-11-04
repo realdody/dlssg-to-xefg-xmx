@@ -34,7 +34,7 @@ namespace Plugin
 
 	enum class CudaSupport : int32_t
 	{
-		Unknown, // XeFG hasn't looked at a GPU yet
+		Unknown, // The startup probe hasn't looked at a GPU yet
 		Supported,
 		Unsupported,
 	};
@@ -43,7 +43,7 @@ namespace Plugin
 
 	enum class XmxSupport : int32_t
 	{
-		Unknown, // XeFG hasn't looked at a GPU yet
+		Unknown, // The startup probe hasn't looked at a GPU yet
 		Supported, // XeFG picks its own XMX network on this GPU
 		Unsupported,
 	};

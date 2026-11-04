@@ -21,6 +21,11 @@ public:
 	// Called once per generated frame, DLSSG.MultiFrameIndex 1 starts a new real frame
 	NGXResult Evaluate(ID3D12GraphicsCommandList* cmdList, const NGXParameter& params);
 
+	// Probes XeFG's own XMX network and the CUDA tensor-core route once, as soon as a device is available. Fills
+	// Plugin::xmxSupport and Plugin::cudaSupport so the menu can disable paths that would fail before the first FG
+	// context. Called from NGX's Init and, as a fallback, from CreateContext.
+	static void ProbeSupport(ID3D12Device* device);
+
 private:
 	// What the context was created for, it's recreated when any of it changes
 	struct Settings

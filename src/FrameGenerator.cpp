@@ -409,6 +409,64 @@ static int32_t NativeModel(ID3D12Device* device)
 	return model;
 }
 
+// Probes the GPU once, as early as a device is available: XeFG's own XMX network first, then the ported model and its
+// CUDA tensor-core route. The menu uses the flags to grey out paths that would fail, and the first context no longer
+// runs these checks. A later different device keeps the first device's answer, same as the native model probe.
+void FrameGenerator::ProbeSupport(ID3D12Device* device)
+{
+	if (!device)
+		return;
+
+	static std::once_flag once;
+	std::call_once(once, [device]
+		{
+			const int32_t native = NativeModel(device);
+
+			// XeFG's own XMX network works here; the port and its CUDA route are only needed when it doesn't.
+			if (native == XeFGXmxModel)
+			{
+				Plugin::cudaSupport = Plugin::CudaSupport::Unsupported;
+				Log::Info("XeFG native XMX network available, CUDA route not applicable");
+				return;
+			}
+
+			// Publishing the ported model patches libxess_fg.dll process wide. It's installed even when another path
+			// is selected, so the menu knows whether CUDA is available and switching paths needs no new context.
+			const bool mfgModel = MfgKernels::Install(XeFG::Module());
+			Plugin::cudaSupport = Plugin::CudaSupport::Unsupported;
+
+			if (!mfgModel)
+			{
+				Log::Info("Tensor-core route skipped: the ported MFG model is not available");
+				return;
+			}
+
+			wchar_t tensorCores[16]{};
+			const DWORD tensorCoresLength = GetEnvironmentVariableW(L"XEFG_TENSOR_CORES", tensorCores, 16);
+
+			if (tensorCoresLength && tensorCoresLength < 16 && (tensorCores[0] == L'0'
+				|| _wcsicmp(tensorCores, L"off") == 0 || _wcsicmp(tensorCores, L"false") == 0))
+			{
+				Log::Info("Tensor-core route disabled by XEFG_TENSOR_CORES");
+				return;
+			}
+
+			static std::once_flag cudaLogOnce;
+			std::call_once(cudaLogOnce, [] { xefg_cuda::SetLog(CudaRouteLog); });
+
+			const auto fatbin = LoadCudaFatbin(MfgKernels::ProgramsDirectory() / L"xefg_cuda_layers.fatbin");
+			std::string reason;
+			if (xefg_cuda::Install(device, XeFG::Module(), fatbin, reason))
+			{
+				Plugin::cudaSupport = Plugin::CudaSupport::Supported;
+				// The route's hooks stay installed, but only a context that selects CUDA turns Dispatch replacement on
+				xefg_cuda::SetEnabled(false);
+			}
+			else
+				Log::Info("Tensor-core route inactive: {}", reason);
+		});
+}
+
 static int32_t PickModel(ID3D12Device* device)
 {
 	const int32_t native = NativeModel(device);
@@ -455,40 +513,16 @@ static Plugin::Network CurrentNetwork(int32_t model)
 
 bool FrameGenerator::CreateContext()
 {
+	// Usually already done at NGX Init. Kept as a fallback when the game never called Init with a device.
+	ProbeSupport(device.Get());
+
 	auto newContext = std::make_shared<Context>();
 
-	// Publishing the ported model patches libxess_fg.dll process wide, so it runs before the first context
+	// Publishing the ported model patches libxess_fg.dll process wide, so it runs before the first context. The probe
+	// already installed it when XeFG's own XMX network isn't available; this also covers a port path chosen later.
 	const bool mfgModel = settings.model != XeFGXmxModel && MfgKernels::Install(XeFG::Module());
 
-	// Optional, and only for the ported model: the route recognizes the int8 layers XeFG decodes itself and
-	// the ported flow programs in the program set. No fatbin (or no NVIDIA RTX GPU) leaves the DXIL path intact.
-	// It's installed even when another path is selected, so the menu knows whether CUDA is available.
-	Plugin::cudaSupport = Plugin::CudaSupport::Unsupported;
-
-	if (mfgModel)
-	{
-		wchar_t tensorCores[16]{};
-		const DWORD tensorCoresLength = GetEnvironmentVariableW(L"XEFG_TENSOR_CORES", tensorCores, 16);
-
-		if (tensorCoresLength && tensorCoresLength < 16 && (tensorCores[0] == L'0' || _wcsicmp(tensorCores, L"off") == 0
-			|| _wcsicmp(tensorCores, L"false") == 0))
-		{
-			Log::Info("Tensor-core route disabled by XEFG_TENSOR_CORES");
-		}
-		else
-		{
-			static std::once_flag cudaLogOnce;
-			std::call_once(cudaLogOnce, [] { xefg_cuda::SetLog(CudaRouteLog); });
-
-			const auto fatbin = LoadCudaFatbin(MfgKernels::ProgramsDirectory() / L"xefg_cuda_layers.fatbin");
-			std::string reason;
-			if (xefg_cuda::Install(device.Get(), XeFG::Module(), fatbin, reason))
-				Plugin::cudaSupport = Plugin::CudaSupport::Supported;
-			else
-				Log::Info("Tensor-core route inactive: {}", reason);
-		}
-	}
-	else if (settings.model != XeFGXmxModel)
+	if (!mfgModel && settings.model != XeFGXmxModel)
 	{
 		// The route runs the ported model, so without the port there's nothing for it to launch
 		Log::Info("Tensor-core route skipped: the ported MFG model is not available");
