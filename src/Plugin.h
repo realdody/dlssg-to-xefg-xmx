@@ -16,6 +16,9 @@ namespace Plugin
 		XmxNative, // XeFG's own XMX network (17), no port, Intel GPUs with XMX only
 	};
 
+	// The path's name in the menu and in the log
+	const char* PathName(Path path);
+
 	struct Options
 	{
 		// XeFG's own XMX network on Intel GPUs with XMX, the ported model on DXIL or CUDA tensor cores, or its DP4a

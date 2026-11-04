@@ -525,6 +525,10 @@ bool FrameGenerator::CreateContext()
 	}
 
 	context = std::move(newContext);
+
+	routeLaunches = xefg_cuda::Snapshot().launches;
+	routeFrames = 0;
+	routeReported = false;
 	return true;
 }
 
@@ -554,6 +558,20 @@ void FrameGenerator::CaptureRealFrame(ID3D12GraphicsCommandList* cmdList, const 
 		(params.GetOr<uint32_t>("DLSSG.MvecJittered", 0) ? XEFGD_INIT_FLAG_JITTERED_MV : 0);
 	wanted.uiMode = hudless ? XEFGD_UI_MODE_BACKBUFFER_HUDLESS : XEFGD_UI_MODE_AUTO;
 	wanted.model = PickModel(device.Get());
+
+	// The menu path can change without a context change: XMX Port and CUDA both run the ported model (16), only the
+	// route that executes its programs differs. Log the switch, and say whether it took effect below
+	const auto path = Plugin::options.path.load();
+	const bool pathChanged = (int32_t)path != loggedPath;
+
+	if (pathChanged)
+	{
+		loggedPath = (int32_t)path;
+		Log::Info("Network path: {}, model {}", Plugin::PathName(path), wanted.model);
+
+		// A switch can retry a context that failed to start
+		createFailed = false;
+	}
 
 	if (wanted != settings)
 	{
@@ -592,6 +610,23 @@ void FrameGenerator::CaptureRealFrame(ID3D12GraphicsCommandList* cmdList, const 
 
 	xefg_cuda::SetEnabled(UseCuda(settings.model));
 	XeFG::SetDebugLines(Plugin::options.debugLines);
+
+	// After CreateContext: before it, the route has not been installed yet
+	if (pathChanged && path == Plugin::Path::Cuda)
+	{
+		const auto route = xefg_cuda::Snapshot();
+
+		if (route.state != xefg_cuda::State::Active)
+			Log::Warn("CUDA path selected, but the tensor-core route is unavailable ({}), the DXIL port runs instead",
+				route.reason.empty() ? std::string("not installed") : route.reason);
+	}
+
+	if (pathChanged && UseCuda(settings.model))
+	{
+		routeLaunches = xefg_cuda::Snapshot().launches;
+		routeFrames = 0;
+		routeReported = false;
+	}
 
 	context->current ^= 1;
 	auto& frame = context->frames[context->current];
@@ -687,6 +722,10 @@ FrameGenerator::InterpolateResult FrameGenerator::Interpolate(ID3D12GraphicsComm
 	params.firstFrameIndex = frameIndex - 1;
 	params.frameCount = 1;
 
+	// Execute records the provider's dispatches into the caller's list; make sure that list's table is hooked too
+	if (UseCuda(settings.model))
+		xefg_cuda::Adopt(cmdList);
+
 	auto result = XeFG::Execute(context->handle, cmdList, params);
 
 	if (result == XEFGD_RESULT_SUCCESS)
@@ -747,6 +786,20 @@ NGXResult FrameGenerator::Evaluate(ID3D12GraphicsCommandList* cmdList, const NGX
 	}
 
 	const auto result = Interpolate(cmdList, output->GetDesc(), frameIndex, frameCount);
+
+	// A few frames after the path or context changed, say whether the tensor-core route is actually the one running
+	if (result == InterpolateResult::Interpolated && UseCuda(settings.model) && !routeReported && ++routeFrames >= 8)
+	{
+		routeReported = true;
+		const auto route = xefg_cuda::Snapshot();
+
+		if (route.launches > routeLaunches)
+			Log::Info("CUDA route: {} tensor-core kernels launched ({} layer binds, {} layers recognized)",
+				route.launches - routeLaunches, route.binds, route.layers);
+		else
+			Log::Warn("CUDA route: no tensor-core kernel launched ({} layer binds, {} layers recognized), the DXIL port is running",
+				route.binds, route.layers);
+	}
 
 	// Without a usable pair (first frame, reset) the real frame is shown again, that's not an error
 	if (result == InterpolateResult::Interpolated)

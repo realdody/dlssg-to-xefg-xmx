@@ -78,4 +78,11 @@ private:
 	Settings settings;
 	std::shared_ptr<Context> context;
 	bool createFailed = false; // retried when the settings change
+
+	// The menu path last seen, and the route launches since the context or the path changed. A few generated frames
+	// later they say whether the selected path really runs on tensor cores
+	int32_t loggedPath = -1;
+	uint64_t routeLaunches = 0;
+	uint32_t routeFrames = 0;
+	bool routeReported = false;
 };

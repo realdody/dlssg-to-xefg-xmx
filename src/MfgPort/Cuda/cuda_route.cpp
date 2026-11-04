@@ -256,7 +256,8 @@ uintptr_t gProviderBegin{}, gProviderEnd{};
 uintptr_t gWrapperBegin{}, gWrapperEnd{};   // the image of the wrapper the provider's device came through, if any
 uintptr_t gRuntimeBegin{}, gRuntimeEnd{};   // dredtable.1: the image of the runtime's device table (its D3D12Core.dll)
 UINT gIncrement{};
-std::atomic<uint64_t> gLaunches{}, gFallbacks{};
+std::atomic<uint64_t> gLaunches{}, gFallbacks{}, gLayerBinds{};
+std::atomic<bool> gExecuteListLogged{};
 std::atomic<uint32_t> gLayerCount{};
 std::array<std::atomic<bool>, std::size(kLayers)> gLayerSeen{};
 
@@ -302,6 +303,30 @@ bool Insert(void* key, uint8_t value) noexcept // under gMutex
         }
     }
     return false;
+}
+// A provider context that is gone releases its pipeline states; the route's references then keep them alive for no
+// reason. At the held limit, drop those and rebuild the key table from the rest (a pipeline state another context
+// still uses stays recognized).
+void Prune() noexcept // gMutex held
+{
+    std::vector<ID3D12PipelineState*> survivors;
+    survivors.reserve(gHeld.size());
+    for (ID3D12PipelineState* state : gHeld)
+    {
+        state->AddRef();
+        if (state->Release() > 1) survivors.push_back(state);
+        else state->Release();
+    }
+    if (survivors.size() == gHeld.size()) return;
+    std::vector<std::pair<void*, uint8_t>> entries;
+    entries.reserve(survivors.size());
+    for (ID3D12PipelineState* state : survivors) entries.emplace_back(state, Lookup(state));
+    for (auto& key : gKeys) key.store(nullptr, std::memory_order_release);
+    for (auto& value : gValues) value.store(0, std::memory_order_relaxed);
+    gHeld.swap(survivors);
+    gLayerCount.store(uint32_t(gHeld.size()), std::memory_order_relaxed);
+    gAnyLayer.store(!gHeld.empty(), std::memory_order_release);
+    for (const auto& [key, value] : entries) Insert(key, value);
 }
 
 
@@ -382,7 +407,9 @@ bool ApplyDevice(void** vtable, std::span<const Hook> hooks) noexcept
 // (tests/xess_cuda --expect-agility). The provider's lists therefore get their first Reset where they are
 // created (HookCreateCommandList*), and the hooks go into the table each one then keeps. An Agility image
 // table is never written: hooks copied from it into the game's own list tables would also be refused by
-// modules that validate those tables (Witcher DOTS, which then falls back to raster hair). dredtable.1: an Agility
+// modules that validate those tables (Witcher DOTS, which then falls back to raster hair). A wrapper's image
+// table is not an Agility one: it is the table its lists keep and forward through (OptiScaler's dxgi.dll proxy
+// in Cyberpunk), so AdoptList adopts it as shared. dredtable.1: an Agility
 // runtime that intercepts every call (DRED) keeps each list on its class table after the first Reset; that table is
 // shared, as the system runtime's is (AdoptList).
 struct ListTable
@@ -471,19 +498,25 @@ HRESULT STDMETHODCALLTYPE HookReset(ID3D12GraphicsCommandList* self, ID3D12Comma
     const HRESULT result = ListOriginal<ResetFn>(self, kReset)(self, allocator, initial);
     auto& r = tRecording;
     r = Recording{self, *reinterpret_cast<void***>(self)};
-    if (SUCCEEDED(result)) r.layer = Lookup(initial);
+    if (SUCCEEDED(result))
+    {
+        r.layer = Lookup(initial);
+        if (r.layer) gLayerBinds.fetch_add(1, std::memory_order_relaxed);
+    }
     return result;
 }
 void STDMETHODCALLTYPE HookSetPipelineState(ID3D12GraphicsCommandList* self, ID3D12PipelineState* state)
 {
-    Track(self).layer = Lookup(state);
+    auto& r = Track(self);
+    r.layer = Lookup(state);
+    if (r.layer) gLayerBinds.fetch_add(1, std::memory_order_relaxed);
     ListOriginal<SetPipelineStateFn>(self, kSetPipelineState)(self, state);
 }
 void STDMETHODCALLTYPE HookSetDescriptorHeaps(ID3D12GraphicsCommandList* self, UINT count, ID3D12DescriptorHeap* const* heaps)
 {
     auto& r = Track(self);
     r.heap = nullptr;
-    if (gActive.load(std::memory_order_relaxed) && heaps)
+    if (heaps)
         for (UINT i = 0; i < count && i < 2; ++i)
             if (heaps[i] && heaps[i]->GetDesc().Type == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) r.heap = heaps[i];
     ListOriginal<SetDescriptorHeapsFn>(self, kSetDescriptorHeaps)(self, count, heaps);
@@ -588,15 +621,31 @@ bool Launch(ID3D12GraphicsCommandList* list, const Recording& r, UINT x, UINT y,
     return true;
 }
 
+const std::array<void*, kVtableSlots>& ListHooks() noexcept;
+
+// A table the route wrote: every slot it patches carries its hook. A per-list copy of a hooked shared table does
+// too, though it is not one of gTables (the runtime may copy the table after adoption).
+bool HookedTable(void** table) noexcept
+{
+    if (!table) return false;
+    const auto& hooks = ListHooks();
+    for (int slot : kListSlots)
+        if (table[slot] != hooks[slot]) return false;
+    return true;
+}
+
 // Only through a table that carries every hook: a recognized pipeline state seen by our SetPipelineState
-// is then the one the Dispatch runs.
+// is then the one the Dispatch runs. A retired own table (complete false) never launches.
 void STDMETHODCALLTYPE HookDispatch(ID3D12GraphicsCommandList* self, UINT x, UINT y, UINT z)
 {
     const auto& r = tRecording;
     if (r.list == self && r.layer && r.table == *reinterpret_cast<void***>(self) && gActive.load(std::memory_order_acquire))
-        if (const ListTable* table = FindTable(r.table); table && table->complete.load(std::memory_order_acquire)
-            && Launch(self, r, x, y, z))
-            return;
+    {
+        const ListTable* table = FindTable(r.table);
+        if ((table && table->complete.load(std::memory_order_acquire)) || (!table && HookedTable(r.table)))
+            if (Launch(self, r, x, y, z))
+                return;
+    }
     ListOriginal<DispatchFn>(self, kDispatch)(self, x, y, z);
 }
 
@@ -741,7 +790,12 @@ const char* AdoptList(ID3D12GraphicsCommandList* list, D3D12_COMMAND_LIST_TYPE t
     const auto at = reinterpret_cast<uintptr_t>(table), object = reinterpret_cast<uintptr_t>(list);
     const bool system = memory.Type == MEM_IMAGE && SystemRuntimeImage(table);
     const bool runtimeClass = !system && memory.Type == MEM_IMAGE && RuntimeClassTable(table);
-    const bool shared = system || runtimeClass;
+    // The wrapper the provider's device came through keeps its command list table in its own image. Unlike an
+    // Agility runtime's image table, a wrapper's table is not copied per list: its lists keep it and forward to
+    // the native list, so patching its slots is stable. HookSlot raises the page protection for each write.
+    const bool wrapperClass = !system && !runtimeClass && memory.Type == MEM_IMAGE
+        && at >= gWrapperBegin && at < gWrapperEnd;
+    const bool shared = system || runtimeClass || wrapperClass;
     const bool own = memory.Type == MEM_PRIVATE && memory.Protect == PAGE_READWRITE && at > object && at - object < 0x10000;
     if (!shared && !own) return memory.Type == MEM_IMAGE ? "table_runtime_image" : "table_unknown";
     const bool writable = memory.Protect == PAGE_READWRITE || memory.Protect == PAGE_EXECUTE_READWRITE;
@@ -822,10 +876,11 @@ void RetireDropped() noexcept // gMutex held
         }
 }
 
+// Lists are adopted while the route is disabled too: the dispatch gate decides whether their Dispatches launch, so
+// turning the route on later takes effect without a new provider context.
 bool Routable(ID3D12Device* device, D3D12_COMMAND_LIST_TYPE type) noexcept
 {
     if (type != D3D12_COMMAND_LIST_TYPE_DIRECT && type != D3D12_COMMAND_LIST_TYPE_COMPUTE) return false;
-    if (!gActive.load(std::memory_order_acquire)) return false;
     ComPtr<IUnknown> identity;
     return SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&identity))) && identity.Get() == gDeviceIdentity;
 }
@@ -834,18 +889,15 @@ std::atomic<uint32_t> gListRefusals{};
 void AdoptCreated(ID3D12GraphicsCommandList* list, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* temporary,
     const char* created, const void* caller) noexcept
 {
-    const char* failure = "inactive";
+    const char* failure{};
     bool shared{}, runtimeClass{};
     size_t held{};
     {
         std::lock_guard lock(gMutex);
-        if (gActive.load(std::memory_order_relaxed))
-        {
-            RetireDropped();
-            failure = AdoptList(list, type, temporary);
-            if (const ListTable* table = FindTable(*reinterpret_cast<void***>(list))) { shared = table->shared; runtimeClass = table->runtimeClass; }
-            for (const auto& table : gTables) held += table.list != nullptr;
-        }
+        RetireDropped();
+        failure = AdoptList(list, type, temporary);
+        if (const ListTable* table = FindTable(*reinterpret_cast<void***>(list))) { shared = table->shared; runtimeClass = table->runtimeClass; }
+        for (const auto& table : gTables) held += table.list != nullptr;
     }
     try
     {
@@ -935,6 +987,7 @@ enum PsoRefusal : uint32_t { kPsoCaller = 1, kPsoDevice = 2 };
 std::atomic<uint32_t> gPsoRefusals{};
 std::atomic<uint64_t> gPsoStreamKinds{};
 std::atomic<uint32_t> gPsoStreamLines{};
+std::atomic<bool> gPsoCapacityLogged{};
 void LayerRefused(PsoRefusal reason, const char* text, const Layer& layer, const void* caller, const Origin* known = nullptr) noexcept
 {
     if (gPsoRefusals.fetch_or(reason) & reason) return;
@@ -971,6 +1024,7 @@ HRESULT STDMETHODCALLTYPE HookCreateCommandList(ID3D12Device* self, UINT mask, D
                     auto& r = tRecording;
                     r = Recording{list.Get(), *reinterpret_cast<void***>(list.Get())};
                     r.layer = Lookup(initial);
+                    if (r.layer) gLayerBinds.fetch_add(1, std::memory_order_relaxed);
                     *out = requested;
                     return S_OK;
                 }
@@ -1030,11 +1084,23 @@ void Recognize(ID3D12Device* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC& de
             const std::string stack = origin.strict ? std::string() : ",\"origin\":\"stack\",\"first\":\"" + Where(origin.first) +
                 "\",\"provider_frame\":" + std::to_string(origin.provider);
             std::lock_guard lock(gMutex);
-            if (!gActive.load(std::memory_order_relaxed) || !Insert(state.Get(), uint8_t(i + 1))) return;
+            if (!Insert(state.Get(), uint8_t(i + 1)))
+            {
+                Prune();
+                if (!Insert(state.Get(), uint8_t(i + 1)))
+                {
+                    if (!gPsoCapacityLogged.exchange(true))
+                    {
+                        try { Log("cuda_pso_refused", std::string("\"reason\":\"capacity\",\"program\":\"") + kLayers[i].info.program + "\""); }
+                        catch (...) {}
+                    }
+                    return;
+                }
+            }
             gHeld.push_back(state.Detach());
             gAnyLayer.store(true, std::memory_order_release);
             gLayerCount.store(uint32_t(gHeld.size()), std::memory_order_relaxed);
-            if (!gLayerSeen[i].exchange(true))
+            if (!gLayerSeen[i].exchange(true) && gActive.load(std::memory_order_relaxed))
                 Log("cuda_layer", std::string("\"program\":\"") + kLayers[i].info.program + "\",\"kernel\":\"" +
                     kLayers[i].info.kernel + "\"" + (own ? ",\"source\":\"rtxmfg\"" : "") + stack);
             return;
@@ -1047,7 +1113,7 @@ HRESULT STDMETHODCALLTYPE HookCreateComputePipelineState(ID3D12Device* self, con
 {
     void* caller = _ReturnAddress();
     const HRESULT result = DeviceOriginal<CreateComputeFn>(self, kCreateComputePipelineState)(self, desc, iid, out);
-    if (SUCCEEDED(result) && desc && out && *out && gActive.load(std::memory_order_acquire))
+    if (SUCCEEDED(result) && desc && out && *out)
         Recognize(self, *desc, iid, *out, caller);
     return result;
 }
@@ -1121,7 +1187,7 @@ HRESULT STDMETHODCALLTYPE HookCreatePipelineState(ID3D12Device2* self, const D3D
 {
     void* caller = _ReturnAddress();
     const HRESULT result = DeviceOriginal<CreateStreamFn>(self, kCreatePipelineState)(self, desc, iid, out);
-    if (SUCCEEDED(result) && desc && out && *out && gActive.load(std::memory_order_acquire))
+    if (SUCCEEDED(result) && desc && out && *out)
     {
         StreamStop stop;
         if (const D3D12_SHADER_BYTECODE* shader = StreamComputeShader(*desc, stop))
@@ -1332,6 +1398,35 @@ void SetEnabled(bool enabled) noexcept
         gActive.store(enabled, std::memory_order_release);
 }
 
+// The caller's list is where Execute records the provider's dispatches, and it may have been created before the
+// route installed (or moved to a private table since), so its table can be one the route never hooked. Called
+// from the Execute path, before the provider records.
+void Adopt(ID3D12GraphicsCommandList* list) noexcept
+{
+    if (!list || gState.load(std::memory_order_acquire) != State::Active) return;
+    try
+    {
+        std::lock_guard lock(gMutex);
+        void** table = *reinterpret_cast<void***>(list);
+        if (const ListTable* record = FindTable(table); record && record->complete.load(std::memory_order_acquire)) return;
+        const D3D12_COMMAND_LIST_TYPE type = list->GetType();
+        if (type != D3D12_COMMAND_LIST_TYPE_DIRECT && type != D3D12_COMMAND_LIST_TYPE_COMPUTE) return;
+        RetireDropped();
+        if (const char* failure = AdoptList(list, type, nullptr))
+        {
+            if (!gExecuteListLogged.exchange(true))
+                try { Log("cuda_list_refused", std::string("\"created\":\"execute\",\"reason\":\"") + failure +
+                    "\",\"table\":\"" + Where(table) + "\""); } catch (...) {}
+            return;
+        }
+        const ListTable* record = FindTable(table);
+        const std::string kind = record && record->runtimeClass ? "runtime_class" : record && record->shared ? "shared" : "own";
+        Log("cuda_list", std::string("\"created\":\"execute\",\"type\":\"") +
+            (type == D3D12_COMMAND_LIST_TYPE_COMPUTE ? "compute" : "direct") + "\",\"table\":\"" + kind + "\"");
+    }
+    catch (...) {}
+}
+
 bool Enabled() noexcept
 {
     return gState.load(std::memory_order_acquire) == State::Active && gActive.load(std::memory_order_acquire);
@@ -1359,6 +1454,7 @@ Status Snapshot() noexcept
     status.layers = gLayerCount.load(std::memory_order_relaxed);
     status.launches = gLaunches.load(std::memory_order_relaxed);
     status.fallbacks = gFallbacks.load(std::memory_order_relaxed);
+    status.binds = gLayerBinds.load(std::memory_order_relaxed);
     try { status.reason = gReason; } catch (...) {}
     return status;
 }

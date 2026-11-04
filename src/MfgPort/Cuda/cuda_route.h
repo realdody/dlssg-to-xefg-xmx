@@ -48,10 +48,14 @@ bool Install(ID3D12Device* device, HMODULE providerModule, std::span<const unsig
 // The configuration turned the route off (OptiScaler.ini [XeFG] XeFGTensorCores = off).
 void Disable(const char* reason) noexcept;
 
-// Dispatch gate: the hooks stay installed, but pass every call through while disabled. Only matters once the route is
-// active, so a context can switch between the CUDA and DXIL paths without restarting.
+// Dispatch gate: the hooks stay installed and keep recognizing the provider's lists and pipeline states, but every
+// Dispatch passes through while disabled, so a context can switch between the CUDA and DXIL paths without restarting.
 void SetEnabled(bool enabled) noexcept;
 bool Enabled() noexcept;
+
+// The command list the provider's Execute records into (the caller's list): adopt its current table if the route
+// has not hooked it yet. No-op for a table that is already hooked.
+void Adopt(ID3D12GraphicsCommandList* list) noexcept;
 
 // psorefused.1 (tests): false restores the caller rule pipeline states had before (the provider is the caller, or the
 // first frame after the wrapper's), which lists always keep. On by default.
@@ -68,6 +72,8 @@ struct Status
     int major{}, minor{};
     uint32_t layers{};        // recognized pipeline states
     uint64_t launches{}, fallbacks{};
+    uint64_t binds{};         // binds of a recognized layer pipeline state
+
     std::string reason;
 };
 Status Snapshot() noexcept;

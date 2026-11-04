@@ -152,6 +152,23 @@ namespace
 	}
 } // namespace
 
+const char* Plugin::PathName(Path path)
+{
+	switch (path)
+	{
+	case Path::XmxPort:
+		return "XMX Port";
+	case Path::Cuda:
+		return "CUDA";
+	case Path::Fallback:
+		return "Fallback (DP4a)";
+	case Path::XmxNative:
+		return "XMX (native)";
+	default:
+		return "Unknown";
+	}
+}
+
 void Plugin::Report(const Status& reported)
 {
 	std::scoped_lock lock(mutex);
