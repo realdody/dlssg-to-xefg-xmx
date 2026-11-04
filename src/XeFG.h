@@ -153,8 +153,8 @@ namespace XeFG
 		bool knownBuild = false; // false when the API was found by scanning
 	};
 
-	// Picks a compatible libxess_fg.dll, loaded ones first, then the one next to this dll, then the one in
-	// <folder with dlls> when this dll is in <folder with dlls>\custom\<any name>\dlssg. Only searches once
+	// Picks a compatible libxess_fg.dll: the one next to this dll, then the one in <folder with dlls> when this dll
+	// is in <folder with dlls>\custom\<any name>\dlssg, and only then a copy that is already loaded. Only searches once
 	bool Load();
 
 	// Can be called from any thread, Library is only set once this says Loaded

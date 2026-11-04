@@ -32,10 +32,16 @@ Model 16 means it's running the XMX path.
 
 ## Which libxess_fg.dll is used
 
-1. Every `libxess_fg.dll` already loaded in the process, the first compatible one wins
-2. The `libxess_fg.dll` next to this dll
-3. A `libxess_fg.dll` up to three folders above this dll, which covers OptiScaler's own copy in its root
+1. The `libxess_fg.dll` next to this dll
+2. A `libxess_fg.dll` up to three folders above this dll, which covers OptiScaler's own copy in its root
    (`\OptiScaler\libxess_fg.dll`)
+3. Every `libxess_fg.dll` already loaded in the process, the first compatible one wins
+
+The copies from 1 and 2 are used whether or not they are already loaded. They are the patches' intended target:
+MFG-Unlocker's port rewrites the model catalog and redirects the program decoder, which has to happen before XeFG's
+first context. A copy the game itself loaded has normally passed that point, and patching it leaves the copy
+OptiScaler initializes untouched. The usual result is `Failed to create heap` from `Init`. Such a copy is only a
+fallback for installs without a `libxess_fg.dll` next to this dll.
 
 Compatible means a build with known function addresses (XeFG 1.3.1 from XeSS SDK 3.0.2, XeFG 1.3.4), or any XeFG
 1.3.x where the functions can be found by scanning and the settings match one of the known layouts. The struct layouts

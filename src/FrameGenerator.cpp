@@ -488,6 +488,11 @@ bool FrameGenerator::CreateContext()
 				Log::Info("Tensor-core route inactive: {}", reason);
 		}
 	}
+	else if (settings.model != XeFGXmxModel)
+	{
+		// The route runs the ported model, so without the port there's nothing for it to launch
+		Log::Info("Tensor-core route skipped: the ported MFG model is not available");
+	}
 
 	xefg_cuda::SetEnabled(UseCuda(settings.model));
 

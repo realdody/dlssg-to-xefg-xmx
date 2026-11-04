@@ -212,29 +212,42 @@ inline Layout Discover(HMODULE module,bool fg) {
         throw std::runtime_error(fg ? "fg_feature_identity" : "ll_feature_identity");
     const auto families=fg ? std::vector<const Family*>(std::begin(generated::fg),std::end(generated::fg))
         : std::vector<const Family*>(std::begin(generated::ll),std::end(generated::ll));
+    // One short line per family, so a rejection says which signature and which check failed. Without this the caller
+    // only knows that none matched, which is the same message for a different build and for a patched one
+    std::string failure;
     for (const auto* family:families) {
+        std::string step="start";
         try {
             Layout result{family->name,family==&generated::fg95 ? kFg95Fields : Fields{},{},{}};
             std::vector<uint32_t> found;
             for (size_t i=0;i<family->count;++i) {
+                step="witness "+std::to_string(i);
                 const auto candidates=image.Find(family->witnesses[i]);
-                if (candidates.size()!=1) throw std::runtime_error("layout_witness_not_unique");
+                if (candidates.size()!=1) {
+                    step+=" matched "+std::to_string(candidates.size())+" times";
+                    throw std::runtime_error("layout_witness_not_unique");
+                }
                 found.push_back(candidates.front());
                 std::vector<unsigned char> bytes(family->witnesses[i].size);
                 if (!image.Read(candidates.front(),bytes.data(),bytes.size())) throw std::runtime_error("layout_witness_read");
                 result.witnessed.emplace(candidates.front(),std::move(bytes));
             }
             for (size_t i=0;i<family->bindingCount;++i) {
+                step="binding "+std::to_string(i);
                 const auto& b=family->bindings[i];
                 uint32_t target=found.at(b.witness)+uint32_t(b.offset);
                 if (b.end) target=image.Target(found.at(b.witness),{b.offset,b.end,-1,0,0});
                 if (!result.addresses.emplace(b.key,target).second) throw std::runtime_error("layout_duplicate_binding");
             }
-            for (size_t i=0;i<family->count;++i) for (size_t j=0;j<family->witnesses[i].count;++j) {
-                const auto& edge=family->witnesses[i].edges[j];
-                if (edge.key && image.Target(found[i],edge)!=result.Rva(edge.key)) throw std::runtime_error("layout_edge_mismatch");
+            for (size_t i=0;i<family->count;++i) {
+                step="witness "+std::to_string(i)+" edges";
+                for (size_t j=0;j<family->witnesses[i].count;++j) {
+                    const auto& edge=family->witnesses[i].edges[j];
+                    if (edge.key && image.Target(found[i],edge)!=result.Rva(edge.key)) throw std::runtime_error("layout_edge_mismatch");
+                }
             }
             if (fg) {
+                step="getter";
                 uintptr_t getter{};
                 if (!image.Read(result.Rva(0x157c3a0)+0x80,&getter,sizeof(getter)) || getter<uintptr_t(module)
                     || getter-uintptr_t(module)>UINT32_MAX) throw std::runtime_error("layout_getter_pointer");
@@ -243,14 +256,20 @@ inline Layout Discover(HMODULE module,bool fg) {
                 if (!image.Read(thunk,&opcode,1) || opcode!=0xe9
                     || image.Target(thunk,{1,5,-1,1,0})!=result.Rva(0x211ae0)) throw std::runtime_error("layout_getter_target");
                 result.addresses.emplace(0xf410,thunk);
+                step="decoder";
                 const auto decodeThunk=result.Rva(0x11230);
                 if (!image.Read(decodeThunk,&opcode,1) || opcode!=0xe9
                     || image.Target(decodeThunk,{1,5,-1,1,0})!=result.Rva(0x19fda0)) throw std::runtime_error("layout_decoder_target");
             }
             return result;
-        } catch (const std::exception&) {}
+        } catch (const std::exception& error) {
+            if (!failure.empty()) failure+="; ";
+            failure+=std::string(family->name)+" "+step+": "+error.what();
+        }
     }
-    throw std::runtime_error(fg ? "fg_layout_not_supported" : "ll_layout_not_supported");
+    std::string message=fg ? "fg_layout_not_supported" : "ll_layout_not_supported";
+    if (!failure.empty()) message+=" ("+failure+")";
+    throw std::runtime_error(message);
 }
 
 inline const Layout& Get(HMODULE module,bool fg=true) {

@@ -57,18 +57,10 @@ namespace
 
 	bool Search()
 	{
-		for (HMODULE module : LoadedXeFGModules())
-		{
-			if (!TryModule(module))
-				continue;
-
-			// Keeps it loaded even if its owner unloads it
-			HMODULE pinned = nullptr;
-			GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(module), &pinned);
-
-			return true;
-		}
-
+		// The port rewrites the model catalog and the program decoder, so it has to run before the library's first
+		// context. A game's own libxess_fg.dll is usually loaded and initialized at startup, and OptiScaler can keep
+		// a separate copy in its root that it initializes itself. The copies the install layout points at are tried
+		// first, loaded or not, so the one that actually ends up driving XeFG is the one that gets patched
 		for (const auto& path : CandidatePaths())
 		{
 			if (!std::filesystem::exists(path))
@@ -86,6 +78,20 @@ namespace
 				return true;
 
 			FreeLibrary(module);
+		}
+
+		Log::Info("No libxess_fg.dll next to this dll or in its parent folders, trying the loaded copies");
+
+		for (HMODULE module : LoadedXeFGModules())
+		{
+			if (!TryModule(module))
+				continue;
+
+			// Keeps it loaded even if its owner unloads it
+			HMODULE pinned = nullptr;
+			GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(module), &pinned);
+
+			return true;
 		}
 
 		Log::Error("No compatible libxess_fg.dll is loaded and none was found next to this dll or in its parent folders");

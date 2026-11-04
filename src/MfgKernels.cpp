@@ -4,12 +4,16 @@
 #include "MfgPort/ModelPort.h"
 #include "MfgPort/RuntimePayload.h"
 #include "MfgPort/RuntimeLayout.h"
+#include "MfgPort/Sha256.h"
 #include "MfgPort/ShaderPort.h"
 
+#include <array>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <utility>
 
 namespace
 {
@@ -34,6 +38,54 @@ namespace
 	{
 		static auto* state = new State;
 		return *state;
+	}
+
+	// The PE header identifies the build; it stays behind when a dll is patched, so the file hash is logged too
+	std::pair<uint32_t, uint32_t> ImageIdentity(HMODULE module) noexcept
+	{
+		const auto* base = reinterpret_cast<const unsigned char*>(module);
+		const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+
+		if (!base || dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0 || dos->e_lfanew > 0x1000)
+			return {};
+
+		const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+
+		if (nt->Signature != IMAGE_NT_SIGNATURE)
+			return {};
+
+		return { static_cast<uint32_t>(nt->FileHeader.TimeDateStamp),
+			static_cast<uint32_t>(nt->OptionalHeader.SizeOfImage) };
+	}
+
+	std::string FileHash(const std::filesystem::path& path) noexcept
+	{
+		try
+		{
+			std::ifstream file(path, std::ios::binary);
+
+			if (!file)
+				return {};
+
+			sha256_util::Hasher hasher;
+			std::array<char, 1 << 20> buffer;
+
+			while (file)
+			{
+				file.read(buffer.data(), buffer.size());
+
+				if (file.gcount() > 0 && !hasher.Update(buffer.data(), static_cast<size_t>(file.gcount())))
+					return {};
+			}
+
+			sha256_util::Digest digest{};
+
+			return hasher.Finish(digest) ? sha256_util::LowerHex(digest) : std::string{};
+		}
+		catch (...)
+		{
+			return {};
+		}
 	}
 
 	// next to the dll, either laid out flat or as MFG-Unlocker's build input has it
@@ -79,7 +131,13 @@ namespace
 		}
 		catch (const std::exception& error)
 		{
-			Log::Warn("Ported XMX MFG model not installed ({}), XeFG keeps its DP4a model", error.what());
+			const auto path = ModulePath(module);
+			const auto [timeDateStamp, sizeOfImage] = ImageIdentity(module);
+			const auto hash = FileHash(path);
+
+			Log::Warn("Ported XMX MFG model not installed ({}), XeFG keeps its DP4a model; module {} build {:08X}, image {:X}{}",
+				error.what(), path.string(), timeDateStamp, sizeOfImage,
+				hash.empty() ? std::string{} : ", file sha256 " + hash);
 		}
 	}
 } // namespace
